@@ -11,6 +11,27 @@ type SqlError = {
   message?: string;
 };
 
+function trimEnv(value: string | undefined) {
+  return typeof value === "string" ? value.trim() : value;
+}
+
+const dbConfig = {
+  server: trimEnv(process.env.DB_SERVER),
+  database: trimEnv(process.env.DB_DATABASE || process.env.DB_NAME),
+  user: trimEnv(process.env.DB_USER),
+  password: trimEnv(process.env.DB_PASSWORD),
+  port: Number(trimEnv(process.env.DB_PORT) || 1433),
+  options: {
+    encrypt: process.env.DB_ENCRYPT === "true",
+    trustServerCertificate: process.env.DB_TRUST_SERVER_CERTIFICATE === "true"
+  },
+  pool: {
+    max: 10,
+    min: 0,
+    idleTimeoutMillis: 30000
+  }
+};
+
 export function getSqlErrorDetails(error: unknown) {
   const sqlError = error as SqlError;
   const code = sqlError?.code ?? "UNKNOWN";
@@ -51,10 +72,10 @@ export function getSqlErrorDetails(error: unknown) {
     };
   }
 
-  if (message.toLowerCase().includes("environment variables are not configured")) {
+  if (message.toLowerCase().includes("missing required database environment variables")) {
     return {
       code: "ECONFIG",
-      message: "SQL Server environment variables are not configured. Set SQLSERVER_CONNECTION_STRING or DB_SERVER, DB_DATABASE (or DB_NAME), DB_USER, and DB_PASSWORD."
+      message: "Missing required database environment variables."
     };
   }
 
@@ -64,47 +85,13 @@ export function getSqlErrorDetails(error: unknown) {
   };
 }
 
-function trimEnv(value: string | undefined) {
-  return typeof value === "string" ? value.trim() : value;
-}
-
 export async function getSqlPool() {
-  const connectionString = trimEnv(process.env.SQLSERVER_CONNECTION_STRING);
-  const server = trimEnv(process.env.DB_SERVER);
-  const database = trimEnv(process.env.DB_DATABASE ?? process.env.DB_NAME);
-  const user = trimEnv(process.env.DB_USER);
-  const password = trimEnv(process.env.DB_PASSWORD);
-  const portRaw = trimEnv(process.env.DB_PORT) ?? "1433";
-  const port = Number(portRaw) || 1433;
-  const encrypt = process.env.DB_ENCRYPT === "true";
-  const trustServerCertificate = process.env.DB_TRUST_SERVER_CERTIFICATE === "true";
-
-  if (!connectionString && (!server || !database || !user || !password)) {
-    throw new Error("SQL Server environment variables are not configured.");
+  if (!process.env.DB_SERVER || !process.env.DB_USER || !process.env.DB_PASSWORD || !process.env.DB_DATABASE) {
+    throw new Error("Missing required database environment variables");
   }
 
   if (!global.sqlPoolPromise) {
-    const pool = connectionString
-      ? new sql.ConnectionPool(connectionString)
-      : new sql.ConnectionPool({
-          server: server as string,
-          database: database as string,
-          user: user as string,
-          password: password as string,
-          port,
-          options: {
-            encrypt,
-            trustServerCertificate,
-            enableArithAbort: true
-          },
-          pool: {
-            max: 300,
-            min: 0,
-            idleTimeoutMillis: 30000
-          },
-          connectionTimeout: 60000,
-          requestTimeout: 60000
-        });
+    const pool = new sql.ConnectionPool(dbConfig as sql.config);
 
     global.sqlPoolPromise = pool.connect().catch((error) => {
       global.sqlPoolPromise = undefined;

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSqlPool, getSqlErrorDetails } from "@/lib/db";
+import { getSqlPool } from "@/lib/db";
 
 export const runtime = "nodejs";
 
@@ -25,12 +25,15 @@ export async function GET() {
         Remarks_NTF,
         CreatedBy,
         CreatedDate,
+        UpdatedBy,
+        UpdatedDate,
+        IsActive,
         Image1Path,
         Image2Path,
         Image3Path,
         Image4Path,
         Image5Path
-      FROM [rifiiorg].[Incident_Reporting]
+      FROM [_rifiiorg_db].[rifiiorg].[Incident_Reporting]
       ORDER BY IncidentID DESC;
     `);
 
@@ -39,12 +42,10 @@ export async function GET() {
       rows: result.recordset
     });
   } catch (error) {
-    const sqlError = getSqlErrorDetails(error);
-
-    console.error("Export Data Error:", sqlError);
+    console.error("SQL Server connection/query error:", error);
     return NextResponse.json({
       success: false,
-      message: "Export data is temporarily unavailable.",
+      message: "Dashboard data is temporarily unavailable.",
       rows: []
     });
   }

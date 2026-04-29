@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSqlPool, getSqlErrorDetails, sql } from "@/lib/db";
+import { getSqlPool, sql } from "@/lib/db";
 
 export const runtime = "nodejs";
 
@@ -169,19 +169,19 @@ export async function GET(request: Request) {
         SUM(CASE WHEN YEAR(CreatedDate) = YEAR(GETDATE()) AND MONTH(CreatedDate) = MONTH(GETDATE()) THEN 1 ELSE 0 END) AS currentMonth,
         SUM(CASE WHEN CreatedDate >= DATEADD(month, DATEDIFF(month, 0, GETDATE()) - 1, 0)
                   AND CreatedDate < DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0) THEN 1 ELSE 0 END) AS previousMonth
-      FROM [rifiiorg].[Incident_Reporting]
+      FROM [_rifiiorg_db].[rifiiorg].[Incident_Reporting]
       WHERE ${whereClause};
     `),
       runQuery(`
       SELECT ISNULL(NULLIF(IncidentCategory, ''), 'Unspecified') AS name, COUNT(1) AS value
-      FROM [rifiiorg].[Incident_Reporting]
+      FROM [_rifiiorg_db].[rifiiorg].[Incident_Reporting]
       WHERE ${whereClause}
       GROUP BY ISNULL(NULLIF(IncidentCategory, ''), 'Unspecified')
       ORDER BY value DESC;
     `),
       runQuery(`
       SELECT ISNULL(NULLIF(IncidentSeverity, ''), 'Unspecified') AS name, COUNT(1) AS value
-      FROM [rifiiorg].[Incident_Reporting]
+      FROM [_rifiiorg_db].[rifiiorg].[Incident_Reporting]
       WHERE ${whereClause}
       GROUP BY ISNULL(NULLIF(IncidentSeverity, ''), 'Unspecified')
       ORDER BY CASE ISNULL(NULLIF(IncidentSeverity, ''), 'Unspecified')
@@ -189,21 +189,21 @@ export async function GET(request: Request) {
     `),
       runQuery(`
       SELECT ISNULL(NULLIF(RegionalCouncil, ''), 'Unspecified') AS name, COUNT(1) AS value
-      FROM [rifiiorg].[Incident_Reporting]
+      FROM [_rifiiorg_db].[rifiiorg].[Incident_Reporting]
       WHERE ${whereClause}
       GROUP BY ISNULL(NULLIF(RegionalCouncil, ''), 'Unspecified')
       ORDER BY value DESC;
     `),
       runQuery(`
       SELECT TOP (10) ISNULL(NULLIF(LocalCouncil, ''), 'Unspecified') AS name, COUNT(1) AS value
-      FROM [rifiiorg].[Incident_Reporting]
+      FROM [_rifiiorg_db].[rifiiorg].[Incident_Reporting]
       WHERE ${whereClause}
       GROUP BY ISNULL(NULLIF(LocalCouncil, ''), 'Unspecified')
       ORDER BY value DESC;
     `),
       runQuery(`
       SELECT TOP (10) ISNULL(NULLIF(IncidentType, ''), 'Unspecified') AS name, COUNT(1) AS value
-      FROM [rifiiorg].[Incident_Reporting]
+      FROM [_rifiiorg_db].[rifiiorg].[Incident_Reporting]
       WHERE ${whereClause}
       GROUP BY ISNULL(NULLIF(IncidentType, ''), 'Unspecified')
       ORDER BY value DESC;
@@ -212,7 +212,7 @@ export async function GET(request: Request) {
       SELECT
         ISNULL(Incident_Status, 'Open') AS name,
         COUNT(1) AS value
-      FROM [rifiiorg].[Incident_Reporting]
+      FROM [_rifiiorg_db].[rifiiorg].[Incident_Reporting]
       WHERE ${whereClause}
       GROUP BY ISNULL(Incident_Status, 'Open')
       ORDER BY CASE ISNULL(Incident_Status, 'Open')
@@ -224,7 +224,7 @@ export async function GET(request: Request) {
     `),
       runQuery(`
       SELECT CONVERT(VARCHAR(7), CreatedDate, 120) AS month, COUNT(1) AS incidents
-      FROM [rifiiorg].[Incident_Reporting]
+      FROM [_rifiiorg_db].[rifiiorg].[Incident_Reporting]
       WHERE ${whereClause}
       GROUP BY CONVERT(VARCHAR(7), CreatedDate, 120)
       ORDER BY month;
@@ -237,7 +237,7 @@ export async function GET(request: Request) {
         SUM(CASE WHEN IncidentSeverity = 'High' THEN 1 ELSE 0 END) AS High,
         SUM(CASE WHEN IncidentSeverity = 'Critical' THEN 1 ELSE 0 END) AS Critical,
         COUNT(1) AS Total
-      FROM [rifiiorg].[Incident_Reporting]
+      FROM [_rifiiorg_db].[rifiiorg].[Incident_Reporting]
       WHERE ${whereClause}
       GROUP BY ISNULL(NULLIF(ResponsibleTeam, ''), 'Unassigned')
       ORDER BY Total DESC;
@@ -251,7 +251,7 @@ export async function GET(request: Request) {
         ResponsibleTeam,
         IncidentSeverity,
         CreatedDate
-      FROM [rifiiorg].[Incident_Reporting]
+      FROM [_rifiiorg_db].[rifiiorg].[Incident_Reporting]
       WHERE ${whereClause} AND IncidentSeverity IN ('High', 'Critical')
       ORDER BY CreatedDate DESC, IncidentID DESC;
     `),
@@ -264,7 +264,7 @@ export async function GET(request: Request) {
         LocalCouncil,
         IncidentSeverity,
         CreatedDate
-      FROM [rifiiorg].[Incident_Reporting]
+      FROM [_rifiiorg_db].[rifiiorg].[Incident_Reporting]
       WHERE ${whereClause}
       ORDER BY CreatedDate DESC, IncidentID DESC;
     `),
@@ -276,7 +276,7 @@ export async function GET(request: Request) {
         IncidentSeverity,
         IncidentType,
         ResponsibleTeam
-      FROM [rifiiorg].[Incident_Reporting]
+      FROM [_rifiiorg_db].[rifiiorg].[Incident_Reporting]
       WHERE IsActive = 1;
     `)
     ]);
@@ -354,8 +354,7 @@ export async function GET(request: Request) {
       insights
     });
   } catch (error) {
-    const sqlError = getSqlErrorDetails(error);
-    console.error("Dashboard fetch failed:", sqlError);
+    console.error("SQL Server connection/query error:", error);
     return NextResponse.json(emptyDashboard);
   }
 }
