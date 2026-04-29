@@ -1,0 +1,11 @@
+.next
+node_modules
+out
+dist
+.env
+.env*.local
+public/uploads/*
+!public/uploads/.gitkeep
+!public/uploads/incidents/
+public/uploads/incidents/*
+!public/uploads/incidents/.gitkeep
