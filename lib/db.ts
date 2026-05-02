@@ -15,22 +15,62 @@ function trimEnv(value: string | undefined) {
   return typeof value === "string" ? value.trim() : value;
 }
 
-const dbConfig = {
-  server: trimEnv(process.env.DB_SERVER),
-  database: trimEnv(process.env.DB_DATABASE || process.env.DB_NAME),
-  user: trimEnv(process.env.DB_USER),
-  password: trimEnv(process.env.DB_PASSWORD),
-  port: Number(trimEnv(process.env.DB_PORT) || 1433),
-  options: {
-    encrypt: process.env.DB_ENCRYPT === "true",
-    trustServerCertificate: process.env.DB_TRUST_SERVER_CERTIFICATE === "true"
-  },
-  pool: {
-    max: 10,
-    min: 0,
-    idleTimeoutMillis: 30000
+const isProduction = process.env.NODE_ENV === "production";
+
+function resolveDbHost() {
+  return trimEnv(process.env.DB_HOST) || trimEnv(process.env.DB_SERVER);
+}
+
+function resolveDbName() {
+  return trimEnv(process.env.DB_NAME) || trimEnv(process.env.DB_DATABASE);
+}
+
+function resolveDbPort(): number {
+  const raw = trimEnv(process.env.DB_PORT);
+  const n = raw ? Number(raw) : 1433;
+  if (!Number.isFinite(n) || n < 1 || n > 65535) {
+    return 1433;
   }
-};
+  return n;
+}
+
+function buildSqlConfig(): sql.config {
+  const server = resolveDbHost();
+  const database = resolveDbName();
+  const user = trimEnv(process.env.DB_USER);
+  const password = trimEnv(process.env.DB_PASSWORD);
+  const port = resolveDbPort();
+
+  const productionOptions = {
+    encrypt: true,
+    trustServerCertificate: false,
+    enableArithAbort: true,
+    connectTimeout: 30_000,
+    requestTimeout: 30_000
+  };
+
+  const developmentOptions = {
+    encrypt: process.env.DB_ENCRYPT === "true",
+    trustServerCertificate: process.env.DB_TRUST_SERVER_CERTIFICATE === "true",
+    enableArithAbort: true,
+    connectTimeout: 30_000,
+    requestTimeout: 30_000
+  };
+
+  return {
+    server: server!,
+    database: database!,
+    user: user!,
+    password: password!,
+    port,
+    options: isProduction ? productionOptions : developmentOptions,
+    pool: {
+      max: 10,
+      min: 0,
+      idleTimeoutMillis: 30000
+    }
+  };
+}
 
 export function getSqlErrorDetails(error: unknown) {
   const sqlError = error as SqlError;
@@ -40,35 +80,39 @@ export function getSqlErrorDetails(error: unknown) {
   if (code === "ELOGIN" || message.toLowerCase().includes("login failed")) {
     return {
       code,
-      message: "SQL Server login failed. Verify DB_USER and DB_PASSWORD in .env.local."
+      message: "SQL Server login failed. Verify DB_USER and DB_PASSWORD in environment variables."
     };
   }
 
   if (code === "ETIMEOUT" || message.toLowerCase().includes("timeout")) {
     return {
       code,
-      message: "SQL Server connection timed out. Verify network access, firewall, port 1433, and Connect Timeout."
+      message:
+        "SQL Server connection timed out. Verify network access, firewall (allow Vercel egress / your IP), port, and connectTimeout."
     };
   }
 
   if (code === "ESOCKET" || message.toLowerCase().includes("failed to connect")) {
     return {
       code,
-      message: "SQL Server network connection failed. Verify server IP, firewall rules, and TCP/IP access."
+      message:
+        "SQL Server network connection failed. Verify DB_HOST (or DB_SERVER), TCP/IP enabled on SQL Server, firewall rules (host + cloud), and that the port is reachable from Vercel."
     };
   }
 
   if (message.toLowerCase().includes("database") && message.toLowerCase().includes("cannot open")) {
     return {
       code,
-      message: "SQL Server database could not be opened. Verify DB_DATABASE and user permissions."
+      message:
+        "SQL Server database could not be opened. Verify DB_NAME (or DB_DATABASE) and user permissions."
     };
   }
 
   if (message.toLowerCase().includes("certificate") || message.toLowerCase().includes("encrypt")) {
     return {
       code,
-      message: "SQL Server encryption or certificate validation failed. Verify DB_ENCRYPT and DB_TRUST_SERVER_CERTIFICATE."
+      message:
+        "SQL Server TLS failed. Production uses encrypt=true and trustServerCertificate=false; the server needs a trusted certificate or adjust strategy for development only."
     };
   }
 
@@ -85,13 +129,22 @@ export function getSqlErrorDetails(error: unknown) {
   };
 }
 
-export async function getSqlPool() {
-  if (!process.env.DB_SERVER || !process.env.DB_USER || !process.env.DB_PASSWORD || !process.env.DB_DATABASE) {
+function assertDbEnvPresent() {
+  const server = resolveDbHost();
+  const database = resolveDbName();
+  const user = trimEnv(process.env.DB_USER);
+  const password = trimEnv(process.env.DB_PASSWORD);
+
+  if (!server || !database || !user || !password) {
     throw new Error("Missing required database environment variables");
   }
+}
+
+export async function getSqlPool() {
+  assertDbEnvPresent();
 
   if (!global.sqlPoolPromise) {
-    const pool = new sql.ConnectionPool(dbConfig as sql.config);
+    const pool = new sql.ConnectionPool(buildSqlConfig());
 
     global.sqlPoolPromise = pool.connect().catch((error) => {
       global.sqlPoolPromise = undefined;
