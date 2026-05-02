@@ -2,9 +2,11 @@ import { NextResponse } from "next/server";
 
 import {
   getDbEnvPresenceReport,
+  getResolvedDbServer,
   getResolvedDbPort,
   getSqlErrorDetails,
-  getSqlPool
+  getSqlPool,
+  testTcpConnection
 } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -22,14 +24,15 @@ const SERVER_SIDE_CHECKS: string[] = [
 ];
 
 function buildPayload(input: {
-  envLoaded: boolean;
-  serverConfigured: boolean;
-  databaseConfigured: boolean;
-  userConfigured: boolean;
-  passwordConfigured: boolean;
-  port: number;
-  dbConnectOk: boolean;
-  testQueryExecuted: boolean;
+  env: {
+    hasServer: boolean;
+    hasDatabase: boolean;
+    hasUser: boolean;
+    hasPassword: boolean;
+    port: number;
+  };
+  tcpReachable: boolean;
+  dbConnected: boolean;
   errorCode: string | null;
   errorMessage: string | null;
 }) {
@@ -42,33 +45,57 @@ function buildPayload(input: {
 /** Safe diagnostics — boolean flags and port only; never DB_PASSWORD or secrets */
 export async function GET() {
   const presence = getDbEnvPresenceReport();
-  const serverConfigured = presence.DB_SERVER || presence.DB_HOST;
-  const databaseConfigured = presence.DB_DATABASE || presence.DB_NAME;
-  const userConfigured = presence.DB_USER;
-  const passwordConfigured = presence.DB_PASSWORD;
+  const hasServer = presence.DB_SERVER || presence.DB_HOST;
+  const hasDatabase = presence.DB_DATABASE || presence.DB_NAME;
+  const hasUser = presence.DB_USER;
+  const hasPassword = presence.DB_PASSWORD;
   const port = getResolvedDbPort();
+  const server = getResolvedDbServer();
 
   const envLoaded = !!(
-    serverConfigured &&
-    databaseConfigured &&
-    userConfigured &&
-    passwordConfigured
+    hasServer &&
+    hasDatabase &&
+    hasUser &&
+    hasPassword
   );
 
   if (!envLoaded) {
     return NextResponse.json(
       buildPayload({
-        envLoaded: false,
-        serverConfigured,
-        databaseConfigured,
-        userConfigured,
-        passwordConfigured,
-        port,
-        dbConnectOk: false,
-        testQueryExecuted: false,
+        env: {
+          hasServer,
+          hasDatabase,
+          hasUser,
+          hasPassword,
+          port
+        },
+        tcpReachable: false,
+        dbConnected: false,
         errorCode: "ECONFIG",
         errorMessage:
           "Required database environment variables are missing. Set DB_SERVER or DB_HOST, DB_DATABASE or DB_NAME, DB_USER, DB_PASSWORD in hosting settings and redeploy."
+      }),
+      { status: 503 }
+    );
+  }
+
+  const tcpReachable = await testTcpConnection(server!, port);
+
+  if (!tcpReachable) {
+    return NextResponse.json(
+      buildPayload({
+        env: {
+          hasServer,
+          hasDatabase,
+          hasUser,
+          hasPassword,
+          port
+        },
+        tcpReachable: false,
+        dbConnected: false,
+        errorCode: "ESOCKET",
+        errorMessage:
+          "SQL Server is not reachable from the deployed server. Please check TCP/IP, firewall, public IP access, and port 1433."
       }),
       { status: 503 }
     );
@@ -79,14 +106,15 @@ export async function GET() {
     await pool.request().query("SELECT 1 AS ok");
     return NextResponse.json(
       buildPayload({
-        envLoaded: true,
-        serverConfigured,
-        databaseConfigured,
-        userConfigured,
-        passwordConfigured,
-        port,
-        dbConnectOk: true,
-        testQueryExecuted: true,
+        env: {
+          hasServer,
+          hasDatabase,
+          hasUser,
+          hasPassword,
+          port
+        },
+        tcpReachable: true,
+        dbConnected: true,
         errorCode: null,
         errorMessage: null
       }),
@@ -96,14 +124,15 @@ export async function GET() {
     const details = getSqlErrorDetails(error);
     return NextResponse.json(
       buildPayload({
-        envLoaded: true,
-        serverConfigured,
-        databaseConfigured,
-        userConfigured,
-        passwordConfigured,
-        port,
-        dbConnectOk: false,
-        testQueryExecuted: false,
+        env: {
+          hasServer,
+          hasDatabase,
+          hasUser,
+          hasPassword,
+          port
+        },
+        tcpReachable: true,
+        dbConnected: false,
         errorCode: details.code,
         errorMessage: details.message
       }),

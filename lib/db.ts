@@ -1,3 +1,4 @@
+import net from "net";
 import sql from "mssql";
 
 /**
@@ -24,11 +25,11 @@ function trimEnv(value: string | undefined) {
 /** Reusable pooled connection for Node serverless warm instances */
 let poolPromise: Promise<sql.ConnectionPool> | null = null;
 
-function resolveServer() {
+export function getResolvedDbServer() {
   return trimEnv(process.env.DB_SERVER) || trimEnv(process.env.DB_HOST);
 }
 
-function resolveDatabase() {
+export function getResolvedDbDatabase() {
   return trimEnv(process.env.DB_DATABASE) || trimEnv(process.env.DB_NAME);
 }
 
@@ -45,8 +46,8 @@ export function getResolvedDbPort(): number {
 }
 
 function buildSqlConfig(): sql.config {
-  const serverRaw = trimEnv(process.env.DB_SERVER) || trimEnv(process.env.DB_HOST);
-  const databaseRaw = trimEnv(process.env.DB_DATABASE) || trimEnv(process.env.DB_NAME);
+  const serverRaw = getResolvedDbServer();
+  const databaseRaw = getResolvedDbDatabase();
   const user = trimEnv(process.env.DB_USER);
   const password = resolvePassword();
 
@@ -96,6 +97,31 @@ export async function getDbPool() {
     });
   }
   return poolPromise;
+}
+
+export async function testTcpConnection(host: string, port: number) {
+  return new Promise<boolean>((resolve) => {
+    const socket = new net.Socket();
+
+    socket.setTimeout(10000);
+
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve(true);
+    });
+
+    socket.once("timeout", () => {
+      socket.destroy();
+      resolve(false);
+    });
+
+    socket.once("error", () => {
+      socket.destroy();
+      resolve(false);
+    });
+
+    socket.connect(port, host);
+  });
 }
 
 /** @deprecated Alias — use `getDbPool`; kept so existing handlers stay unchanged */

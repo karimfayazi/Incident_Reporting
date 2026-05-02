@@ -1,7 +1,15 @@
 import "server-only";
 
 import { cookies } from "next/headers";
-import { getSqlErrorDetails, getDbEnvPresenceReport, getSqlPool, sql } from "@/lib/db";
+import {
+  getDbEnvPresenceReport,
+  getResolvedDbPort,
+  getResolvedDbServer,
+  getSqlErrorDetails,
+  getSqlPool,
+  sql,
+  testTcpConnection
+} from "@/lib/db";
 import {
   getRoleRedirect,
   normalizeUserRole,
@@ -160,6 +168,17 @@ export async function login({ username, password }: LoginInput): Promise<LoginRe
     const databaseError = getLoginDatabaseError(error);
     if (databaseError.details.code === "ECONFIG") {
       console.error("Login failed: DB env incomplete (presence flags, no secrets):", getDbEnvPresenceReport());
+    } else if (databaseError.details.code === "ESOCKET") {
+      const server = getResolvedDbServer();
+      const port = getResolvedDbPort();
+      void testTcpConnection(server || "", port).then((tcpReachable) => {
+        console.error("Login failed: SQL network diagnostic (safe):", {
+          code: "ESOCKET",
+          hostConfigured: Boolean(server),
+          port,
+          tcpReachable
+        });
+      });
     } else {
       console.error("Login failed:", databaseError.details);
     }
