@@ -3,6 +3,13 @@ import sql from "mssql";
 /**
  * Server-only secrets: never NEXT_PUBLIC_*.
  * .env.local applies locally only; production needs host env vars (e.g. Vercel Dashboard).
+ *
+ * Server-side checklist when ESOCKET / unreachable from the host (e.g. Vercel):
+ * - SQL Server Configuration Manager: enable TCP/IP; restart the SQL Server service.
+ * - SQL Server: allow remote connections; SQL Server Authentication; confirm TCP port (default 1433).
+ * - Firewall (OS + cloud): allow inbound TCP on the SQL port; allow sqlservr.exe if needed.
+ * - Vercel/serverless: outbound IPs are not fixed—IP allowlists on the SQL side often block; use wider rules,
+ *   an API hosted near SQL, or a backend with static egress.
  */
 
 type SqlError = {
@@ -29,6 +36,14 @@ function resolvePassword() {
   return trimEnv(process.env.DB_PASSWORD);
 }
 
+export function getResolvedDbPort(): number {
+  const port = Number(process.env.DB_PORT || 1433);
+  if (!Number.isFinite(port) || port < 1 || port > 65535) {
+    return 1433;
+  }
+  return port;
+}
+
 function buildSqlConfig(): sql.config {
   const serverRaw = trimEnv(process.env.DB_SERVER) || trimEnv(process.env.DB_HOST);
   const databaseRaw = trimEnv(process.env.DB_DATABASE) || trimEnv(process.env.DB_NAME);
@@ -45,9 +60,7 @@ function buildSqlConfig(): sql.config {
     );
   }
 
-  const port = Number(process.env.DB_PORT || 1433);
-  const portSafe =
-    Number.isFinite(port) && port >= 1 && port <= 65535 ? port : 1433;
+  const portSafe = getResolvedDbPort();
 
   const encrypt =
     String(process.env.DB_ENCRYPT || "false").toLowerCase() === "true";
@@ -140,7 +153,7 @@ export function getSqlErrorDetails(error: unknown) {
     return {
       code: "ESOCKET",
       message:
-        "SQL Server network connection failed. Please verify TCP/IP, firewall, remote SQL access, and port 1433."
+        "SQL Server is not reachable from the deployed server. Please check TCP/IP, firewall, public IP access, and port 1433."
     };
   }
 

@@ -62,7 +62,7 @@ const MISSING_DB_ENV_USER_MESSAGE =
   "Database configuration is missing on the deployed server. Please add environment variables in hosting settings and redeploy.";
 
 const ESOCKET_USER_MESSAGE =
-  "SQL Server network connection failed. Please verify TCP/IP, firewall, remote SQL access, and port 1433.";
+  "SQL Server is not reachable from the deployed server. Please check TCP/IP, firewall, public IP access, and port 1433.";
 
 function getLoginDatabaseError(error: unknown) {
   const details = getSqlErrorDetails(error);
