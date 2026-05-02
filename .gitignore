@@ -9,3 +9,7 @@ public/uploads/*
 !public/uploads/incidents/
 public/uploads/incidents/*
 !public/uploads/incidents/.gitkeep
+
+# Uploaded incident images (kept outside public/)
+uploads/NC_IR_Upload/*
+!uploads/.gitkeep

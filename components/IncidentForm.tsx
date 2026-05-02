@@ -1,30 +1,21 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
-import { regionalCouncilMap } from "@/lib/council-data";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 const categoryOptions = ["Safety", "Security", "Health", "Others"];
 const severityOptions = ["Low", "Medium", "High", "Critical"];
-const maxIncidentImageBytes = 3 * 1024 * 1024;
-const maxIncidentImages = 5;
-const allowedIncidentImageTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
-const allowedIncidentImageExt = /\.(jpe?g|png|webp)$/i;
-
-function formatVolunteerPhone(value: string) {
-  const digits = value.replace(/\D/g, "").slice(0, 11);
-
-  if (digits.length <= 4) {
-    return digits;
-  }
-
-  return `${digits.slice(0, 4)}-${digits.slice(4)}`;
-}
+const maxIncidentImageBytes = 1_048_576;
+const allowedIncidentImageTypes = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif"
+]);
+const allowedIncidentImageExt = /\.(jpe?g|png|gif|webp)$/i;
 
 type IncidentFormProps = {
   onSubmitted?: () => Promise<void> | void;
   endpoint?: string;
-  useCouncilDropdowns?: boolean;
-  requireAllFields?: boolean;
 };
 
 type ToastState = {
@@ -32,86 +23,53 @@ type ToastState = {
   message: string;
 } | null;
 
-export function IncidentForm({
-  onSubmitted,
-  endpoint = "/api/incidents/create",
-  useCouncilDropdowns = false,
-  requireAllFields = false
-}: IncidentFormProps) {
+type FieldErrors = Partial<Record<string, string>>;
+
+type LocationCascadeRow = {
+  DidargahName: string;
+  RegionalCouncilName: string;
+  LocalCouncilName: string;
+};
+
+function getUniqueSorted(values: Array<string | null | undefined>) {
+  return Array.from(
+    new Set(values.map((value) => (typeof value === "string" ? value.trim() : "")).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b));
+}
+
+function formatVolunteerPhone(value: string) {
+  return value.replace(/[^\d+\-\s()]/g, "").slice(0, 20);
+}
+
+function validateIncidentImage(file: File): string | null {
+  if (file.size > maxIncidentImageBytes) {
+    return "Image must be 1 MB or smaller.";
+  }
+
+  if (!allowedIncidentImageTypes.has(file.type) && !allowedIncidentImageExt.test(file.name)) {
+    return "Only JPG, JPEG, PNG, GIF, or WEBP images are allowed.";
+  }
+
+  return null;
+}
+
+export function IncidentForm({ onSubmitted, endpoint = "/api/record-incident" }: IncidentFormProps) {
   const formRef = useRef<HTMLFormElement>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [phone, setPhone] = useState("");
-  const [regionalCouncil, setRegionalCouncil] = useState("");
-  const [localCouncil, setLocalCouncil] = useState("");
+  const [locationRows, setLocationRows] = useState<LocationCascadeRow[]>([]);
+  const [selectedDarbarName, setSelectedDarbarName] = useState("");
+  const [selectedRegionalCouncilName, setSelectedRegionalCouncilName] = useState("");
+  const [selectedLocalCouncilName, setSelectedLocalCouncilName] = useState("");
+  const [isLocationLoading, setIsLocationLoading] = useState(true);
+  const [lookupError, setLookupError] = useState("");
   const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
+  const [formError, setFormError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [toast, setToast] = useState<ToastState>(null);
-  const [councilMap, setCouncilMap] = useState<Record<string, string[]>>(() => ({ ...regionalCouncilMap }));
-  const [councilsLoading, setCouncilsLoading] = useState(false);
-  const [councilsNotice, setCouncilsNotice] = useState("");
-  const [incidentImageFiles, setIncidentImageFiles] = useState<File[]>([]);
-  const [incidentImagePreviews, setIncidentImagePreviews] = useState<string[]>([]);
-  const incidentImagesInputRef = useRef<HTMLInputElement>(null);
-
-  const regionalKeys = Object.keys(councilMap);
-  const localCouncilOptions = regionalCouncil ? councilMap[regionalCouncil] ?? [] : [];
-
-  useEffect(() => {
-    if (!useCouncilDropdowns) {
-      return;
-    }
-
-    let cancelled = false;
-
-    async function loadCouncils() {
-      setCouncilsLoading(true);
-      setCouncilsNotice("");
-      try {
-        const response = await fetch("/api/councils");
-        const data = (await response.json()) as {
-          success?: boolean;
-          map?: Record<string, string[]>;
-          source?: string;
-          message?: string;
-        };
-
-        if (cancelled) {
-          return;
-        }
-
-        if (data.success && data.map && Object.keys(data.map).length > 0) {
-          setCouncilMap(data.map);
-          if (data.source === "static") {
-            setCouncilsNotice("Council list is using built-in data (database lookup empty or not configured).");
-          } else {
-            setCouncilsNotice("");
-          }
-        } else {
-          setCouncilMap({ ...regionalCouncilMap });
-          setCouncilsNotice(
-            typeof data.message === "string" && data.message.length > 0
-              ? data.message
-              : "Could not load councils from the database. Using built-in list."
-          );
-        }
-      } catch {
-        if (!cancelled) {
-          setCouncilMap({ ...regionalCouncilMap });
-          setCouncilsNotice("Could not load councils from the database. Using built-in list.");
-        }
-      } finally {
-        if (!cancelled) {
-          setCouncilsLoading(false);
-        }
-      }
-    }
-
-    void loadCouncils();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [useCouncilDropdowns]);
+  const [incidentImages, setIncidentImages] = useState<Array<File | null>>([null, null, null]);
+  const [incidentImageErrors, setIncidentImageErrors] = useState<string[]>(["", "", ""]);
+  const [incidentImagePreviews, setIncidentImagePreviews] = useState<string[]>(["", "", ""]);
 
   useEffect(() => {
     if (!toast) {
@@ -119,177 +77,211 @@ export function IncidentForm({
     }
 
     const timeoutId = window.setTimeout(() => setToast(null), 4000);
-
     return () => window.clearTimeout(timeoutId);
   }, [toast]);
 
   useEffect(() => {
-    const urls = incidentImageFiles.map((file) => URL.createObjectURL(file));
-    setIncidentImagePreviews(urls);
+    const previews = incidentImages.map((file) => (file ? URL.createObjectURL(file) : ""));
+    setIncidentImagePreviews(previews);
 
     return () => {
-      urls.forEach((url) => URL.revokeObjectURL(url));
+      previews.forEach((preview) => {
+        if (preview) {
+          URL.revokeObjectURL(preview);
+        }
+      });
     };
-  }, [incidentImageFiles]);
+  }, [incidentImages]);
 
-  const validateIncidentImagesClient = (files: File[]): string | null => {
-    if (files.length > maxIncidentImages) {
-      return `You can upload at most ${maxIncidentImages} pictures.`;
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadDarbarLocations() {
+      setIsLocationLoading(true);
+      setLookupError("");
+
+      try {
+        const response = await fetch("/api/darbar-locations", { cache: "no-store" });
+        const data = (await response.json().catch(() => ({}))) as {
+          success?: boolean;
+          message?: string;
+          rows?: LocationCascadeRow[];
+        };
+
+        if (cancelled) {
+          return;
+        }
+
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || "Darbar, Regional Council, and Local Council list could not be loaded.");
+        }
+
+        setLocationRows(Array.isArray(data.rows) ? data.rows : []);
+      } catch (error) {
+        if (!cancelled) {
+          setLookupError(
+            error instanceof Error
+              ? error.message
+              : "Darbar, Regional Council, and Local Council list could not be loaded."
+          );
+          setLocationRows([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLocationLoading(false);
+        }
+      }
     }
 
-    for (const file of files) {
-      if (file.size === 0) {
-        continue;
-      }
+    void loadDarbarLocations();
 
-      if (file.size > maxIncidentImageBytes) {
-        return "Each picture must be 3 MB or smaller.";
-      }
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-      if (!allowedIncidentImageTypes.has(file.type) && !allowedIncidentImageExt.test(file.name)) {
-        return "Pictures must be JPG, JPEG, PNG, or WEBP.";
-      }
+  const darbarLocationOptions = useMemo(
+    () => getUniqueSorted(locationRows.map((row) => row.DidargahName)),
+    [locationRows]
+  );
+  const regionalCouncilOptions = useMemo(
+    () =>
+      getUniqueSorted(
+        locationRows
+          .filter((row) => row.DidargahName === selectedDarbarName)
+          .map((row) => row.RegionalCouncilName)
+      ),
+    [locationRows, selectedDarbarName]
+  );
+  const localCouncilOptions = useMemo(
+    () =>
+      getUniqueSorted(
+        locationRows
+          .filter(
+            (row) =>
+              row.DidargahName === selectedDarbarName &&
+              row.RegionalCouncilName === selectedRegionalCouncilName
+          )
+          .map((row) => row.LocalCouncilName)
+      ),
+    [locationRows, selectedDarbarName, selectedRegionalCouncilName]
+  );
+
+  function setErrorForRequired(formData: FormData, key: string, label: string, errors: FieldErrors) {
+    if (!String(formData.get(key) ?? "").trim()) {
+      errors[key] = `${label} is required.`;
     }
+  }
 
-    return null;
-  };
+  function handleIncidentImageChange(index: number, file: File | null, input: HTMLInputElement) {
+    const nextImages = [...incidentImages];
+    const nextErrors = [...incidentImageErrors];
 
-  const handleIncidentImagesChange = (filesList: FileList | null) => {
-    const next = filesList ? Array.from(filesList) : [];
-
-    if (next.length > maxIncidentImages) {
-      setError(`You can upload at most ${maxIncidentImages} pictures.`);
-      setIncidentImageFiles([]);
-      if (incidentImagesInputRef.current) {
-        incidentImagesInputRef.current.value = "";
-      }
-
+    if (!file) {
+      nextImages[index] = null;
+      nextErrors[index] = "";
+      setIncidentImages(nextImages);
+      setIncidentImageErrors(nextErrors);
       return;
     }
 
-    const msg = validateIncidentImagesClient(next);
-    if (msg) {
-      setError(msg);
-      setIncidentImageFiles([]);
-      if (incidentImagesInputRef.current) {
-        incidentImagesInputRef.current.value = "";
-      }
+    const imageError = validateIncidentImage(file);
 
-      return;
+    if (imageError) {
+      input.value = "";
+      nextImages[index] = null;
+      nextErrors[index] = imageError;
+    } else {
+      nextImages[index] = file;
+      nextErrors[index] = "";
     }
 
-    setError("");
-    setIncidentImageFiles(next);
-  };
+    setIncidentImages(nextImages);
+    setIncidentImageErrors(nextErrors);
+  }
 
-  const handlePhoneChange = (value: string) => {
-    setPhone(formatVolunteerPhone(value));
-  };
-
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setError("");
+    setFormError("");
     setMessage("");
 
     const formData = new FormData(event.currentTarget);
+    const nextErrors: FieldErrors = {};
 
-    if (!formData.get("VolunteerName") || !formData.get("IncidentCategory") || !formData.get("IncidentSeverity")) {
-      setError("Volunteer name, incident category, and incident severity are required.");
+    [
+      ["Darbar_Location", "Darbar Location"],
+      ["VolunteerName", "Name of Volunteer"],
+      ["VolunteerPhone", "Phone Number of Volunteer"],
+      ["IncidentCategory", "Incident Category"],
+      ["IncidentTitle", "What is the incident about?"],
+      ["Region", "Regional Council"],
+      ["LocalCouncil", "Local Council"],
+      ["VillageLocation", "Village / Location"],
+      ["IncidentDescription", "Describe what happened"],
+      ["IncidentPlace", "Where did it happen?"],
+      ["ResponsibleTeam", "Which team should handle this?"],
+      ["IncidentSeverity", "How serious is the incident?"]
+    ].forEach(([key, label]) => setErrorForRequired(formData, key, label, nextErrors));
+
+    if (incidentImageErrors.some(Boolean)) {
+      nextErrors.IncidentImages = "Please fix image upload errors before submitting.";
+    }
+
+    if (Object.keys(nextErrors).length > 0) {
+      setFieldErrors(nextErrors);
+      setFormError("Please complete the required fields before submitting.");
       return;
     }
 
-    if (useCouncilDropdowns && (!formData.get("RegionalCouncil") || !formData.get("LocalCouncil"))) {
-      setError("Regional council and local council are required.");
-      return;
-    }
-
-    if (requireAllFields) {
-      const requiredFields = [
-        ["VolunteerName", "Volunteer name"],
-        ["VolunteerPhone", "Volunteer phone"],
-        ["IncidentCategory", "Incident category"],
-        ["ConcernedPersonName", "Concerned person name"],
-        ["LocalCouncil", "Local council"],
-        ["IncidentType", "Incident type"],
-        ["IncidentLocation", "Incident location"],
-        ["AdditionalNotes", "Additional notes"],
-        ["ResponsibleTeam", "Responsible team"],
-        ["IncidentSeverity", "Incident severity"]
-      ];
-
-      if (useCouncilDropdowns) {
-        requiredFields.splice(4, 0, ["RegionalCouncil", "Regional council"]);
-      }
-
-      const missingField = requiredFields.find(([name]) => !formData.get(name));
-
-      if (missingField) {
-        setError(`${missingField[1]} is required.`);
-        return;
-      }
-    }
-
-    const incidentImageParts = Array.from(formData.getAll("IncidentImages")).filter(
-      (item): item is File => item instanceof File
-    );
-    const incidentImagesErr = validateIncidentImagesClient(incidentImageParts);
-    if (incidentImagesErr) {
-      setError(incidentImagesErr);
-      return;
-    }
-
+    setFieldErrors({});
     setIsSubmitting(true);
 
     try {
+      incidentImages.forEach((file, index) => {
+        if (file) {
+          formData.set(`Image${index + 1}File`, file);
+        }
+      });
+
       const response = await fetch(endpoint, {
         method: "POST",
         body: formData
       });
-
-      const result = (await response.json()) as {
+      const result = (await response.json().catch(() => ({}))) as {
         success?: boolean;
         error?: string;
         message?: string;
+        incidentId?: number;
       };
 
-      if (!response.ok || !result?.success) {
-        const apiMsg =
-          typeof result?.error === "string" && result.error.length > 0
-            ? result.error
-            : typeof result?.message === "string" && result.message.length > 0
-              ? result.message
-              : "Incident could not be submitted.";
-        throw new Error(apiMsg);
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || result.message || "Incident report could not be submitted.");
       }
 
-      setMessage("Your Incident Report has been updated successfully.");
-      setToast({
-        type: "success",
-        message: "Your Incident Report has been updated successfully."
-      });
+      const successMessage = result.incidentId
+        ? `Incident report submitted successfully! Reference ID: ${result.incidentId}`
+        : "Incident report submitted successfully!";
+      setMessage(successMessage);
+      setToast({ type: "success", message: successMessage });
       setPhone("");
-      setRegionalCouncil("");
-      setLocalCouncil("");
-      setIncidentImageFiles([]);
-      if (incidentImagesInputRef.current) {
-        incidentImagesInputRef.current.value = "";
-      }
+      setSelectedDarbarName("");
+      setSelectedRegionalCouncilName("");
+      setSelectedLocalCouncilName("");
+      setIncidentImages([null, null, null]);
+      setIncidentImageErrors(["", "", ""]);
       formRef.current?.reset();
       await onSubmitted?.();
-    } catch (submitError) {
+    } catch (error) {
       const friendly =
-        submitError instanceof Error && submitError.message.length > 0
-          ? submitError.message
-          : "Something went wrong while saving the incident. Please try again.";
-      setError(friendly);
-      setToast({
-        type: "error",
-        message: friendly
-      });
+        error instanceof Error && error.message.length > 0
+          ? error.message
+          : "Something went wrong while saving the incident report. Please try again.";
+      setFormError(friendly);
+      setToast({ type: "error", message: friendly });
     } finally {
       setIsSubmitting(false);
     }
-  };
+  }
 
   return (
     <>
@@ -307,33 +299,66 @@ export function IncidentForm({
         </div>
       ) : null}
 
-      <form className="incident-form" ref={formRef} onSubmit={handleSubmit}>
-        {requireAllFields ? <input type="hidden" name="RequireAllFields" value="1" /> : null}
+      <form className="incident-form" ref={formRef} onSubmit={handleSubmit} noValidate>
         <section className="form-section" aria-labelledby="volunteer-info">
-          <h4 id="volunteer-info">A. Volunteer Information</h4>
+          <h4 id="volunteer-info">Volunteer Information</h4>
           <div className="form-grid">
+            <div className="field field--full">
+              <label htmlFor="Darbar_Location">
+                Darbar Location <span className="required">*</span>
+              </label>
+              <select
+                id="Darbar_Location"
+                name="Darbar_Location"
+                required
+                value={selectedDarbarName}
+                disabled={isLocationLoading}
+                onChange={(event) => {
+                  setSelectedDarbarName(event.target.value);
+                  setSelectedRegionalCouncilName("");
+                  setSelectedLocalCouncilName("");
+                }}
+              >
+                <option value="" disabled>
+                  {isLocationLoading ? "Loading Darbar Locations..." : "Select Darbar Location"}
+                </option>
+                {darbarLocationOptions.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+              {fieldErrors.Darbar_Location ? <p className="field-error">{fieldErrors.Darbar_Location}</p> : null}
+              {lookupError ? (
+                <p className="field-error" role="status">
+                  {lookupError}
+                </p>
+              ) : null}
+            </div>
+
             <div className="form-row form-row--responsive volunteer-contact-row">
               <div className="field">
                 <label htmlFor="VolunteerName">
                   Name of Volunteer <span className="required">*</span>
                 </label>
                 <input id="VolunteerName" name="VolunteerName" required />
+                {fieldErrors.VolunteerName ? <p className="field-error">{fieldErrors.VolunteerName}</p> : null}
               </div>
 
               <div className="field">
-                <label htmlFor="VolunteerPhone">Phone Number of Volunteer</label>
+                <label htmlFor="VolunteerPhone">
+                  Phone Number of Volunteer <span className="required">*</span>
+                </label>
                 <input
                   id="VolunteerPhone"
                   name="VolunteerPhone"
                   inputMode="tel"
-                  maxLength={12}
-                  pattern="[0-9]{4}-[0-9]{7}"
                   placeholder="0346-9750336"
-                  required={requireAllFields}
+                  required
                   value={phone}
-                  onChange={(event) => handlePhoneChange(event.target.value)}
+                  onChange={(event) => setPhone(formatVolunteerPhone(event.target.value))}
                 />
-                <p className="help-text">Format: 0346-9750336</p>
+                {fieldErrors.VolunteerPhone ? <p className="field-error">{fieldErrors.VolunteerPhone}</p> : null}
               </div>
             </div>
 
@@ -351,124 +376,130 @@ export function IncidentForm({
                   </option>
                 ))}
               </select>
+              {fieldErrors.IncidentCategory ? <p className="field-error">{fieldErrors.IncidentCategory}</p> : null}
             </div>
           </div>
         </section>
 
-        <section className="form-section" aria-labelledby="concerned-details">
-          <h4 id="concerned-details">B. Concerned Individual Details</h4>
+        <section className="form-section" aria-labelledby="incident-details">
+          <h4 id="incident-details">Concerned Incident / Individual Details</h4>
           <div className="form-grid">
             <div className="field field--full">
-              <label htmlFor="ConcernedPersonName">
-                Name of Concerned Person {requireAllFields ? <span className="required">*</span> : null}
+              <label htmlFor="IncidentTitle">
+                What is the incident about? <span className="required">*</span>
               </label>
-              <input id="ConcernedPersonName" name="ConcernedPersonName" required={requireAllFields} />
+              <input id="IncidentTitle" name="IncidentTitle" placeholder="Person, accident, fire, or any issue" required />
+              {fieldErrors.IncidentTitle ? <p className="field-error">{fieldErrors.IncidentTitle}</p> : null}
             </div>
 
-            {useCouncilDropdowns ? (
-              <>
-                {councilsNotice ? (
-                  <p className="help-text council-fetch-notice" role="status" aria-live="polite">
-                    {councilsNotice}
-                  </p>
-                ) : null}
-                <div className="form-row form-row--responsive form-row--councils">
-                  <div className="field">
-                    <label htmlFor="RegionalCouncil">
-                      Regional Council <span className="required">*</span>
-                    </label>
-                    <select
-                      id="RegionalCouncil"
-                      name="RegionalCouncil"
-                      required
-                      disabled={councilsLoading}
-                      value={regionalCouncil}
-                      onChange={(event) => {
-                        setRegionalCouncil(event.target.value);
-                        setLocalCouncil("");
-                      }}
-                    >
-                      <option value="" disabled>
-                        {councilsLoading ? "Loading…" : "Select regional council"}
-                      </option>
-                      {regionalKeys.map((option) => (
-                        <option key={option} value={option}>
-                          {option}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="field">
-                    <label htmlFor="LocalCouncil">
-                      Local Council <span className="required">*</span>
-                    </label>
-                    <select
-                      id="LocalCouncil"
-                      name="LocalCouncil"
-                      required
-                      disabled={!regionalCouncil || councilsLoading}
-                      value={localCouncil}
-                      onChange={(event) => setLocalCouncil(event.target.value)}
-                    >
-                      <option value="" disabled>
-                        {regionalCouncil ? "Select local council" : "Select regional council first"}
-                      </option>
-                      {localCouncilOptions.map((option) => (
-                        <option key={option} value={option}>
-                          {option}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="help-text" aria-live="polite">
-                      {regionalCouncil
-                        ? `${localCouncilOptions.length} local councils available for ${regionalCouncil}.`
-                        : "Local councils will appear after selecting a regional council."}
-                    </p>
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div className="field field--full">
-                <label htmlFor="LocalCouncil">
-                  Local Council {requireAllFields ? <span className="required">*</span> : null}
+            <div className="form-row form-row--responsive form-row--councils">
+              <div className="field">
+                <label htmlFor="Region">
+                  Regional Council <span className="required">*</span>
                 </label>
-                <input id="LocalCouncil" name="LocalCouncil" required={requireAllFields} />
+                <select
+                  id="Region"
+                  name="Region"
+                  required
+                  disabled={!selectedDarbarName}
+                  value={selectedRegionalCouncilName}
+                  onChange={(event) => {
+                    setSelectedRegionalCouncilName(event.target.value);
+                    setSelectedLocalCouncilName("");
+                  }}
+                >
+                  <option value="" disabled>
+                    {selectedDarbarName ? "Select Regional Council" : "Select Darbar Location first"}
+                  </option>
+                  {regionalCouncilOptions.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+                {fieldErrors.Region ? <p className="field-error">{fieldErrors.Region}</p> : null}
               </div>
-            )}
 
-            <div className="field field--full">
-              <label htmlFor="IncidentType">
-                What type of incident are you reporting? {requireAllFields ? <span className="required">*</span> : null}
-              </label>
-              <textarea id="IncidentType" name="IncidentType" required={requireAllFields} />
+              <div className="field">
+                <label htmlFor="LocalCouncil">
+                  Local Council <span className="required">*</span>
+                </label>
+                <select
+                  id="LocalCouncil"
+                  name="LocalCouncil"
+                  required
+                  disabled={!selectedRegionalCouncilName}
+                  value={selectedLocalCouncilName}
+                  onChange={(event) => setSelectedLocalCouncilName(event.target.value)}
+                >
+                  <option value="" disabled>
+                    {selectedRegionalCouncilName ? "Select Local Council" : "Select Regional Council first"}
+                  </option>
+                  {localCouncilOptions.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+                <p className="help-text" aria-live="polite">
+                  {selectedRegionalCouncilName
+                    ? `${localCouncilOptions.length} Local Councils available for ${selectedRegionalCouncilName}.`
+                    : "Local Councils will appear after selecting Regional Council."}
+                </p>
+                {fieldErrors.LocalCouncil ? <p className="field-error">{fieldErrors.LocalCouncil}</p> : null}
+              </div>
             </div>
 
             <div className="field field--full">
-              <label htmlFor="IncidentLocation">
-                Where did the incident occur? {requireAllFields ? <span className="required">*</span> : null}
+              <label htmlFor="VillageLocation">
+                Village / Location <span className="required">*</span>
               </label>
-              <textarea id="IncidentLocation" name="IncidentLocation" required={requireAllFields} />
+              <textarea id="VillageLocation" name="VillageLocation" placeholder="Enter village or area" required />
+              {fieldErrors.VillageLocation ? <p className="field-error">{fieldErrors.VillageLocation}</p> : null}
+            </div>
+
+            <div className="field field--full">
+              <label htmlFor="IncidentDescription">
+                Describe what happened <span className="required">*</span>
+              </label>
+              <textarea
+                id="IncidentDescription"
+                name="IncidentDescription"
+                placeholder="Write details of the incident in simple words"
+                required
+              />
+              {fieldErrors.IncidentDescription ? <p className="field-error">{fieldErrors.IncidentDescription}</p> : null}
+            </div>
+
+            <div className="field field--full">
+              <label htmlFor="IncidentPlace">
+                Where did it happen? <span className="required">*</span>
+              </label>
+              <textarea id="IncidentPlace" name="IncidentPlace" placeholder="Exact location of incident" required />
+              {fieldErrors.IncidentPlace ? <p className="field-error">{fieldErrors.IncidentPlace}</p> : null}
             </div>
 
             <div className="form-row form-row--responsive form-row--team-severity">
               <div className="field">
                 <label htmlFor="ResponsibleTeam">
-                  Select the team responsible for the issue {requireAllFields ? <span className="required">*</span> : null}
+                  Which team should handle this? <span className="required">*</span>
                 </label>
-                <select id="ResponsibleTeam" name="ResponsibleTeam" required={requireAllFields} defaultValue="">
-                  <option value="">Select responsible team</option>
+                <select id="ResponsibleTeam" name="ResponsibleTeam" required defaultValue="">
+                  <option value="" disabled>
+                    Select responsible team
+                  </option>
                   {categoryOptions.map((option) => (
                     <option key={option} value={option}>
                       {option}
                     </option>
                   ))}
                 </select>
+                {fieldErrors.ResponsibleTeam ? <p className="field-error">{fieldErrors.ResponsibleTeam}</p> : null}
               </div>
 
               <div className="field">
                 <label htmlFor="IncidentSeverity">
-                  Incident Severity <span className="required">*</span>
+                  How serious is the incident? <span className="required">*</span>
                 </label>
                 <select id="IncidentSeverity" name="IncidentSeverity" required defaultValue="">
                   <option value="" disabled>
@@ -480,74 +511,59 @@ export function IncidentForm({
                     </option>
                   ))}
                 </select>
+                {fieldErrors.IncidentSeverity ? <p className="field-error">{fieldErrors.IncidentSeverity}</p> : null}
               </div>
-            </div>
-
-            <div className="field field--full">
-              <label htmlFor="AdditionalNotes">
-                Additional Notes for CC Agent {requireAllFields ? <span className="required">*</span> : null}
-              </label>
-              <textarea id="AdditionalNotes" name="AdditionalNotes" required={requireAllFields} />
             </div>
 
             <div className="field field--full incident-images-panel">
               <div className="incident-images-panel__heading-block">
-                <h5 className="incident-images-panel__title">Upload Incident Pictures</h5>
+                <h5 className="incident-images-panel__title">Upload images if any</h5>
                 <p className="help-text incident-images-panel__intro">
-                  You can upload up to 5 pictures related to this incident.
+                  Optional. Upload up to 3 images. Each image must be 1 MB or smaller.
                 </p>
               </div>
-              <label className="incident-images-panel__label" htmlFor="IncidentImages">
-                Select pictures (optional)
-              </label>
-              <input
-                ref={incidentImagesInputRef}
-                id="IncidentImages"
-                name="IncidentImages"
-                type="file"
-                accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
-                multiple
-                className="incident-images-panel__file-input"
-                onChange={(event) => handleIncidentImagesChange(event.target.files)}
-                aria-describedby="incident-images-hint"
-              />
-              <p id="incident-images-hint" className="help-text">
-                JPG, JPEG, PNG, or WEBP — maximum 3 MB per picture ({maxIncidentImages} pictures maximum).
-              </p>
-              {incidentImageFiles.length > 0 ? (
-                <ul className="incident-images-file-list" aria-label="Selected incident pictures">
-                  {incidentImageFiles.map((file, index) => (
-                    <li key={`${file.name}-${file.lastModified}-${index}`}>
-                      <span className="incident-images-file-list__name">{file.name}</span>
-                      <span className="incident-images-file-list__meta">
-                        {(file.size / 1024).toFixed(1)} KB · Slot {index + 1}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-              {incidentImagePreviews.length > 0 ? (
-                <div className="incident-images-previews">
-                  {incidentImagePreviews.map((src, index) => (
-                    <img
-                      key={`${src}-${index}`}
-                      src={src}
-                      alt={`Preview ${index + 1}`}
-                      className="incident-images-previews__thumb"
+              <div className="incident-image-slots">
+                {[0, 1, 2].map((index) => (
+                  <div className="incident-image-slot" key={index}>
+                    <label className="incident-images-panel__label" htmlFor={`IncidentImage${index + 1}`}>
+                      Image {index + 1}
+                    </label>
+                    <input
+                      id={`IncidentImage${index + 1}`}
+                      type="file"
+                      accept=".jpg,.jpeg,.png,.gif,.webp,image/jpeg,image/png,image/gif,image/webp"
+                      className="incident-images-panel__file-input"
+                      onChange={(event) =>
+                        handleIncidentImageChange(index, event.target.files?.[0] ?? null, event.currentTarget)
+                      }
                     />
-                  ))}
-                </div>
-              ) : null}
+                    {incidentImageErrors[index] ? <p className="field-error">{incidentImageErrors[index]}</p> : null}
+                    {incidentImagePreviews[index] ? (
+                      <img
+                        src={incidentImagePreviews[index]}
+                        alt={`Selected image ${index + 1} preview`}
+                        className="incident-images-previews__thumb"
+                      />
+                    ) : null}
+                    {incidentImages[index] ? (
+                      <p className="help-text">
+                        {incidentImages[index]?.name} · {((incidentImages[index]?.size ?? 0) / 1024).toFixed(1)} KB
+                      </p>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+              {fieldErrors.IncidentImages ? <p className="field-error">{fieldErrors.IncidentImages}</p> : null}
             </div>
           </div>
         </section>
 
         <div className="form-actions">
-          <button className="primary-button" type="submit" disabled={isSubmitting}>
-            {isSubmitting ? "Submitting..." : "Submit Incident"}
+          <button className="primary-button" type="submit" disabled={isSubmitting || incidentImageErrors.some(Boolean)}>
+            {isSubmitting ? "Uploading images and submitting..." : "Submit Incident Report"}
           </button>
           {message ? <p className="status-message">{message}</p> : null}
-          {error ? <p className="status-message status-message--error">{error}</p> : null}
+          {formError ? <p className="status-message status-message--error">{formError}</p> : null}
         </div>
       </form>
     </>

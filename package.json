@@ -9,11 +9,20 @@
     "start": "next start -H 127.0.0.1 -p 3000"
   },
   "dependencies": {
+    "@hookform/resolvers": "^5.2.2",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.7",
+    "lucide-react": "^1.14.0",
     "mssql": "^12.5.0",
     "next": "^16.2.4",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
-    "recharts": "^3.8.1"
+    "react-hook-form": "^7.74.0",
+    "react-hot-toast": "^2.6.0",
+    "recharts": "^3.8.1",
+    "sharp": "^0.34.5",
+    "xlsx": "^0.18.5",
+    "zod": "^4.4.1"
   },
   "devDependencies": {
     "@types/mssql": "^12.3.0",
