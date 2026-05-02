@@ -41,9 +41,11 @@ function buildSqlConfig(): sql.config {
   const password = trimEnv(process.env.DB_PASSWORD);
   const port = resolveDbPort();
 
+  const prodTrustExplicit = trimEnv(process.env.DB_TRUST_SERVER_CERTIFICATE) === "true";
+
   const productionOptions = {
     encrypt: true,
-    trustServerCertificate: false,
+    trustServerCertificate: prodTrustExplicit,
     enableArithAbort: true,
     connectTimeout: 30_000,
     requestTimeout: 30_000
@@ -112,7 +114,7 @@ export function getSqlErrorDetails(error: unknown) {
     return {
       code,
       message:
-        "SQL Server TLS failed. Production uses encrypt=true and trustServerCertificate=false; the server needs a trusted certificate or adjust strategy for development only."
+        "SQL Server TLS failed. Production uses encrypt=true. Self-signed certs: set DB_TRUST_SERVER_CERTIFICATE=true on Vercel, or install a publicly trusted TLS cert on SQL Server."
     };
   }
 
