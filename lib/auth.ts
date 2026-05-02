@@ -29,6 +29,8 @@ type LoginResult =
       ok: false;
       error: string;
       status: 400 | 401 | 403 | 500 | 503;
+      /** Populated for SQL / configuration failures so clients can show code + guidance. */
+      diagnostics?: { code: string; message: string };
     };
 
 type UserRow = {
@@ -134,7 +136,15 @@ export async function login({ username, password }: LoginInput): Promise<LoginRe
   } catch (error) {
     const databaseError = getLoginDatabaseError(error);
     console.error("Login failed:", databaseError.details);
-    return { ok: false, error: databaseError.error, status: databaseError.status };
+    return {
+      ok: false,
+      error: databaseError.error,
+      status: databaseError.status,
+      diagnostics: {
+        code: databaseError.details.code,
+        message: databaseError.details.message
+      }
+    };
   }
 }
 

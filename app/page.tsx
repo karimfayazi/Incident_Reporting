@@ -44,13 +44,23 @@ export default function LoginPage() {
       const data = (await response.json().catch(() => ({}))) as {
         message?: string;
         error?: string;
+        errorCode?: string;
+        errorMessage?: string;
         redirectTo?: string;
       };
 
       if (!response.ok) {
-        const message = data.message || data.error || "Invalid username or password.";
-        setServerError(message);
-        toast.error(message);
+        const base = data.message || data.error || "Invalid username or password.";
+        const lines = [base];
+        if (data.errorCode) {
+          lines.push(`Error code: ${data.errorCode}`);
+        }
+        if (data.errorMessage) {
+          lines.push(data.errorMessage);
+        }
+        const full = lines.join("\n");
+        setServerError(full);
+        toast.error(data.errorCode ? `${base} (${data.errorCode})` : base);
         return;
       }
 

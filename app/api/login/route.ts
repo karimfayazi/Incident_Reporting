@@ -26,14 +26,16 @@ export async function POST(request: Request) {
     });
 
     if (!result.ok) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: result.error,
-          user: null
-        },
-        { status: result.status }
-      );
+      const body: Record<string, unknown> = {
+        success: false,
+        message: result.error,
+        user: null
+      };
+      if (result.diagnostics) {
+        body.errorCode = result.diagnostics.code;
+        body.errorMessage = result.diagnostics.message;
+      }
+      return NextResponse.json(body, { status: result.status });
     }
 
     return NextResponse.json({

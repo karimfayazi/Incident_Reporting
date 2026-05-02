@@ -1634,6 +1634,7 @@ button {
   color: var(--danger);
   padding: 12px 14px;
   font-weight: 800;
+  white-space: pre-line;
 }
 
 .auth-workspace {

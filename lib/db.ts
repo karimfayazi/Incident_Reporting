@@ -121,7 +121,7 @@ export function getSqlErrorDetails(error: unknown) {
   if (message.toLowerCase().includes("missing required database environment variables")) {
     return {
       code: "ECONFIG",
-      message: "Missing required database environment variables."
+      message
     };
   }
 
@@ -137,8 +137,18 @@ function assertDbEnvPresent() {
   const user = trimEnv(process.env.DB_USER);
   const password = trimEnv(process.env.DB_PASSWORD);
 
-  if (!server || !database || !user || !password) {
-    throw new Error("Missing required database environment variables");
+  const missing: string[] = [];
+  if (!server) missing.push("DB_HOST or DB_SERVER");
+  if (!database) missing.push("DB_NAME or DB_DATABASE");
+  if (!user) missing.push("DB_USER");
+  if (!password) missing.push("DB_PASSWORD");
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing required database environment variables (${missing.join(
+        ", "
+      )}). Add them in your host settings (for Vercel: Project → Settings → Environment Variables) and redeploy so serverless bundles pick them up.`
+    );
   }
 }
 
