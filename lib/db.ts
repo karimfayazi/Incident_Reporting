@@ -1,10 +1,9 @@
 import sql from "mssql";
 
-declare global {
-  // Reuse the SQL pool across hot reloads in development.
-  // eslint-disable-next-line no-var
-  var sqlPoolPromise: Promise<sql.ConnectionPool> | undefined;
-}
+/**
+ * Server-only secrets: never NEXT_PUBLIC_*.
+ * .env.local applies locally only; production needs host env vars (e.g. Vercel Dashboard).
+ */
 
 type SqlError = {
   code?: string;
@@ -15,62 +14,102 @@ function trimEnv(value: string | undefined) {
   return typeof value === "string" ? value.trim() : value;
 }
 
-const isProduction = process.env.NODE_ENV === "production";
+/** Reusable pooled connection for Node serverless warm instances */
+let poolPromise: Promise<sql.ConnectionPool> | null = null;
 
-function resolveDbHost() {
-  return trimEnv(process.env.DB_HOST) || trimEnv(process.env.DB_SERVER);
+function resolveServer() {
+  return trimEnv(process.env.DB_SERVER) || trimEnv(process.env.DB_HOST);
 }
 
-function resolveDbName() {
-  return trimEnv(process.env.DB_NAME) || trimEnv(process.env.DB_DATABASE);
+function resolveDatabase() {
+  return trimEnv(process.env.DB_DATABASE) || trimEnv(process.env.DB_NAME);
 }
 
-function resolveDbPort(): number {
-  const raw = trimEnv(process.env.DB_PORT);
-  const n = raw ? Number(raw) : 1433;
-  if (!Number.isFinite(n) || n < 1 || n > 65535) {
-    return 1433;
-  }
-  return n;
+function resolvePassword() {
+  return trimEnv(process.env.DB_PASSWORD);
 }
 
 function buildSqlConfig(): sql.config {
-  const server = resolveDbHost();
-  const database = resolveDbName();
+  const serverRaw = trimEnv(process.env.DB_SERVER) || trimEnv(process.env.DB_HOST);
+  const databaseRaw = trimEnv(process.env.DB_DATABASE) || trimEnv(process.env.DB_NAME);
   const user = trimEnv(process.env.DB_USER);
-  const password = trimEnv(process.env.DB_PASSWORD);
-  const port = resolveDbPort();
+  const password = resolvePassword();
 
-  const prodTrustExplicit = trimEnv(process.env.DB_TRUST_SERVER_CERTIFICATE) === "true";
+  const server = serverRaw || "";
+  const database = databaseRaw || "";
 
-  const productionOptions = {
-    encrypt: true,
-    trustServerCertificate: prodTrustExplicit,
-    enableArithAbort: true,
-    connectTimeout: 30_000,
-    requestTimeout: 30_000
-  };
+  if (!server || !database || !user || !password) {
+    console.warn("[Incident Reporting][db] Incomplete DB env — check Vercel Environment Variables.");
+    throw new Error(
+      "Missing required database environment variables. Required: DB_SERVER or DB_HOST, DB_DATABASE or DB_NAME, DB_USER, DB_PASSWORD."
+    );
+  }
 
-  const developmentOptions = {
-    encrypt: process.env.DB_ENCRYPT === "true",
-    trustServerCertificate: process.env.DB_TRUST_SERVER_CERTIFICATE === "true",
-    enableArithAbort: true,
-    connectTimeout: 30_000,
-    requestTimeout: 30_000
-  };
+  const port = Number(process.env.DB_PORT || 1433);
+  const portSafe =
+    Number.isFinite(port) && port >= 1 && port <= 65535 ? port : 1433;
 
-  return {
-    server: server!,
-    database: database!,
-    user: user!,
-    password: password!,
-    port,
-    options: isProduction ? productionOptions : developmentOptions,
+  const encrypt =
+    String(process.env.DB_ENCRYPT || "false").toLowerCase() === "true";
+
+  const config: sql.config = {
+    server,
+    database,
+    user,
+    password,
+    port: portSafe,
+    options: {
+      encrypt,
+      trustServerCertificate: true,
+      enableArithAbort: true
+    },
     pool: {
       max: 10,
       min: 0,
       idleTimeoutMillis: 30000
-    }
+    },
+    connectionTimeout: 30000,
+    requestTimeout: 30000
+  };
+
+  return config;
+}
+
+export async function getDbPool() {
+  if (!poolPromise) {
+    poolPromise = sql.connect(buildSqlConfig()).catch((err) => {
+      poolPromise = null;
+      throw err;
+    });
+  }
+  return poolPromise;
+}
+
+/** @deprecated Alias — use `getDbPool`; kept so existing handlers stay unchanged */
+export async function getSqlPool() {
+  return getDbPool();
+}
+
+export type DbEnvPresenceReport = Record<
+  "DB_SERVER" | "DB_HOST" | "DB_DATABASE" | "DB_NAME" | "DB_USER" | "DB_PASSWORD" | "DB_PORT" | "DB_ENCRYPT",
+  boolean
+>;
+
+/** True iff each named variable is present and non-empty after trim — never exposes values */
+export function getDbEnvPresenceReport(): DbEnvPresenceReport {
+  const has = (key: string) =>
+    typeof process.env[key] === "string" &&
+    (trimEnv(process.env[key])?.length ?? 0) > 0;
+
+  return {
+    DB_SERVER: has("DB_SERVER"),
+    DB_HOST: has("DB_HOST"),
+    DB_DATABASE: has("DB_DATABASE"),
+    DB_NAME: has("DB_NAME"),
+    DB_USER: has("DB_USER"),
+    DB_PASSWORD: has("DB_PASSWORD"),
+    DB_PORT: has("DB_PORT"),
+    DB_ENCRYPT: has("DB_ENCRYPT")
   };
 }
 
@@ -90,35 +129,48 @@ export function getSqlErrorDetails(error: unknown) {
     return {
       code,
       message:
-        "SQL Server connection timed out. Verify network access, firewall (allow Vercel egress / your IP), port, and connectTimeout."
+        "SQL Server connection timed out. Verify network access, firewall, port 1433, and connection timeout."
     };
   }
 
-  if (code === "ESOCKET" || message.toLowerCase().includes("failed to connect")) {
+  if (
+    code === "ESOCKET" ||
+    message.toLowerCase().includes("failed to connect")
+  ) {
+    return {
+      code: "ESOCKET",
+      message:
+        "SQL Server network connection failed. Please verify TCP/IP, firewall, remote SQL access, and port 1433."
+    };
+  }
+
+  if (
+    message.toLowerCase().includes("database") &&
+    message.toLowerCase().includes("cannot open")
+  ) {
     return {
       code,
       message:
-        "SQL Server network connection failed. Verify DB_HOST (or DB_SERVER), TCP/IP enabled on SQL Server, firewall rules (host + cloud), and that the port is reachable from Vercel."
+        "SQL Server database could not be opened. Verify DB_DATABASE or DB_NAME and user permissions."
     };
   }
 
-  if (message.toLowerCase().includes("database") && message.toLowerCase().includes("cannot open")) {
+  if (
+    message.toLowerCase().includes("certificate") ||
+    message.toLowerCase().includes("encrypt")
+  ) {
     return {
       code,
       message:
-        "SQL Server database could not be opened. Verify DB_NAME (or DB_DATABASE) and user permissions."
+        "SQL Server TLS failed. Adjust DB_ENCRYPT or server certificate settings."
     };
   }
 
-  if (message.toLowerCase().includes("certificate") || message.toLowerCase().includes("encrypt")) {
-    return {
-      code,
-      message:
-        "SQL Server TLS failed. Production uses encrypt=true. Self-signed certs: set DB_TRUST_SERVER_CERTIFICATE=true on Vercel, or install a publicly trusted TLS cert on SQL Server."
-    };
-  }
-
-  if (message.toLowerCase().includes("missing required database environment variables")) {
+  if (
+    message
+      .toLowerCase()
+      .includes("missing required database environment variables")
+  ) {
     return {
       code: "ECONFIG",
       message
@@ -129,42 +181,6 @@ export function getSqlErrorDetails(error: unknown) {
     code,
     message: "SQL Server request failed. Check server logs for details."
   };
-}
-
-function assertDbEnvPresent() {
-  const server = resolveDbHost();
-  const database = resolveDbName();
-  const user = trimEnv(process.env.DB_USER);
-  const password = trimEnv(process.env.DB_PASSWORD);
-
-  const missing: string[] = [];
-  if (!server) missing.push("DB_HOST or DB_SERVER");
-  if (!database) missing.push("DB_NAME or DB_DATABASE");
-  if (!user) missing.push("DB_USER");
-  if (!password) missing.push("DB_PASSWORD");
-
-  if (missing.length > 0) {
-    throw new Error(
-      `Missing required database environment variables (${missing.join(
-        ", "
-      )}). Add them in your host settings (for Vercel: Project → Settings → Environment Variables) and redeploy so serverless bundles pick them up.`
-    );
-  }
-}
-
-export async function getSqlPool() {
-  assertDbEnvPresent();
-
-  if (!global.sqlPoolPromise) {
-    const pool = new sql.ConnectionPool(buildSqlConfig());
-
-    global.sqlPoolPromise = pool.connect().catch((error) => {
-      global.sqlPoolPromise = undefined;
-      throw error;
-    });
-  }
-
-  return global.sqlPoolPromise;
 }
 
 export { sql };

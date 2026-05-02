@@ -3,6 +3,7 @@ import { z } from "zod";
 import { login } from "@/lib/auth";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const loginSchema = z.object({
   username: z.string().trim().min(1, "Username is required."),

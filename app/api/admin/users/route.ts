@@ -5,6 +5,7 @@ import { getSqlErrorDetails, getSqlPool, sql } from "@/lib/db";
 import { normalizeUserRole, userRoles } from "@/lib/session";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const createUserSchema = z.object({
   username: z.string().trim().min(3, "Username must be at least 3 characters.").max(100),

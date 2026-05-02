@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSqlPool, sql } from "@/lib/db";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const TABLE = "[_rifiiorg_db].[rifiiorg].[NC_RI_Incident_Reporting]";
 

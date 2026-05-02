@@ -4,7 +4,9 @@ out
 dist
 *.tsbuildinfo
 .env
+.env.local
 .env*.local
+
 public/uploads/*
 !public/uploads/.gitkeep
 !public/uploads/incidents/

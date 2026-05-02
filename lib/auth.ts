@@ -1,7 +1,7 @@
 import "server-only";
 
 import { cookies } from "next/headers";
-import { getSqlErrorDetails, getSqlPool, sql } from "@/lib/db";
+import { getSqlErrorDetails, getDbEnvPresenceReport, getSqlPool, sql } from "@/lib/db";
 import {
   getRoleRedirect,
   normalizeUserRole,
@@ -58,19 +58,42 @@ function mapUser(row: UserRow): SessionUser | null {
   };
 }
 
+const MISSING_DB_ENV_USER_MESSAGE =
+  "Database configuration is missing on the deployed server. Please add environment variables in hosting settings and redeploy.";
+
+const ESOCKET_USER_MESSAGE =
+  "SQL Server network connection failed. Please verify TCP/IP, firewall, remote SQL access, and port 1433.";
+
 function getLoginDatabaseError(error: unknown) {
   const details = getSqlErrorDetails(error);
   const connectionCodes = new Set(["ECONFIG", "ELOGIN", "ETIMEOUT", "ESOCKET"]);
 
-  if (
+  const isConnectionClass =
     connectionCodes.has(details.code) ||
     details.message.toLowerCase().includes("connection") ||
-    details.message.toLowerCase().includes("database could not be opened")
-  ) {
-    return { error: "Database connection failed.", status: 503 as const, details };
+    details.message.toLowerCase().includes("database could not be opened");
+
+  if (!isConnectionClass) {
+    return { error: "Database query failed.", status: 500 as const, details };
   }
 
-  return { error: "Database query failed.", status: 500 as const, details };
+  if (details.code === "ECONFIG") {
+    return {
+      error: MISSING_DB_ENV_USER_MESSAGE,
+      status: 503 as const,
+      details: { ...details, message: MISSING_DB_ENV_USER_MESSAGE }
+    };
+  }
+
+  if (details.code === "ESOCKET") {
+    return {
+      error: ESOCKET_USER_MESSAGE,
+      status: 503 as const,
+      details: { code: "ESOCKET", message: ESOCKET_USER_MESSAGE }
+    };
+  }
+
+  return { error: "Database connection failed.", status: 503 as const, details };
 }
 
 export async function login({ username, password }: LoginInput): Promise<LoginResult> {
@@ -135,15 +158,19 @@ export async function login({ username, password }: LoginInput): Promise<LoginRe
     };
   } catch (error) {
     const databaseError = getLoginDatabaseError(error);
-    console.error("Login failed:", databaseError.details);
+    if (databaseError.details.code === "ECONFIG") {
+      console.error("Login failed: DB env incomplete (presence flags, no secrets):", getDbEnvPresenceReport());
+    } else {
+      console.error("Login failed:", databaseError.details);
+    }
     return {
       ok: false,
       error: databaseError.error,
       status: databaseError.status,
-      diagnostics: {
-        code: databaseError.details.code,
-        message: databaseError.details.message
-      }
+      diagnostics:
+        databaseError.details.code === "ECONFIG"
+          ? undefined
+          : { code: databaseError.details.code, message: databaseError.details.message }
     };
   }
 }

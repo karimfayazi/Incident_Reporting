@@ -6,6 +6,7 @@ import sharp from "sharp";
 import { getSqlErrorDetails, getSqlPool, sql } from "@/lib/db";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const incidentCategories = new Set(["Safety", "Security", "Health", "Others"]);
 const responsibleTeams = new Set(["Safety", "Security", "Health", "Others"]);
